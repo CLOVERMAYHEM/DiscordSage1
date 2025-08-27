@@ -3,7 +3,7 @@ const { SlashCommandBuilder, ActionRowBuilder, StringSelectMenuBuilder } = requi
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("factions")
-    .setDescription("Request to join a faction."),
+    .setDescription("Request to join a faction"),
   async execute(interaction) {
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
@@ -17,9 +17,9 @@ module.exports = {
     );
 
     await interaction.reply({
-      content: "📢 Select a faction to **request** to join. Leaders will be notified for approval!",
+      content: "Select a faction to request joining. Leaders will be notified!",
       components: [row],
-      ephemeral: true
+      ephemeral: true,
     });
   },
 };
