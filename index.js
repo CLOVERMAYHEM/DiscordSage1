@@ -20,9 +20,11 @@ if (!global.factionTimes)
     Unicorn_Rapists: 0,
     Special_Activities_Directive: 0,
   };
+if (!global.userTimes) global.userTimes = {};
 if (!global.pendingRequests) global.pendingRequests = {};
 if (!global.clockInChannelId) global.clockInChannelId = null;
 if (!global.notificationChannelId) global.notificationChannelId = null;
+if (!global.guildSettings) global.guildSettings = {};
 
 // Faction leaders mapping
 global.factionLeaders = {
@@ -70,8 +72,27 @@ function formatDuration(milliseconds) {
   }
 }
 
+// Utility function to check if factions are enabled for a guild
+function areFactionsEnabled(guild) {
+  const guildId = guild.id;
+  if (!global.guildSettings[guildId]) {
+    // Initialize with default settings (factions enabled)
+    global.guildSettings[guildId] = {
+      factionsEnabled: true,
+      clockInChannelId: null,
+      notificationChannelId: null
+    };
+  }
+  return global.guildSettings[guildId].factionsEnabled;
+}
+
 // Utility function to get user's faction
 function getUserFaction(member) {
+  // Return null if factions are disabled for this guild
+  if (!areFactionsEnabled(member.guild)) {
+    return null;
+  }
+  
   const factions = [
     "Laughing Meeks",
     "Unicorn Rapists",
@@ -173,6 +194,78 @@ async function sendClockOutMessage(member, channel, sessionDuration) {
     );
   } catch (error) {
     console.error(`❌ Error sending clock-out message:`, error);
+  }
+}
+
+// Send motivational DM to user after voice session
+async function sendMotivationalDM(member, sessionDuration) {
+  // Only send motivational DMs if factions are enabled for this guild
+  if (!areFactionsEnabled(member.guild)) {
+    return;
+  }
+  
+  try {
+    const faction = getUserFaction(member);
+    const durationText = formatDuration(sessionDuration);
+    
+    // Motivational messages based on faction
+    const motivationalMessages = {
+      "Laughing Meeks": [
+        "Keep laughing in the face of adversity! Your faction is proud of your dedication!",
+        "Another victory for the Laughing Meeks! Your time and effort strengthen the brotherhood!",
+        "The Meeks legacy grows stronger with warriors like you! Keep up the amazing work!",
+        "Laughter echoes through the ranks - your faction salutes your commitment!"
+      ],
+      "Unicorn Rapists": [
+        "Magnificent work, warrior! Your faction's power grows with every moment you contribute!",
+        "The unicorns bow to your dedication! Keep charging forward for glory!",
+        "Your commitment brings honor to the Unicorn Rapists! Stay fierce!",
+        "Legend in the making! Your faction celebrates your unwavering spirit!"
+      ],
+      "Special Activities Directive": [
+        "Mission accomplished, operative! Your dedication to the directive is exemplary!",
+        "Special activities require special dedication - and you've delivered! Outstanding work!",
+        "The directive recognizes your exceptional commitment! Keep executing with precision!",
+        "Your service to the Special Activities Directive is commendable! Stay focused!"
+      ],
+      "No Faction": [
+        "Great work in voice! Consider joining a faction to maximize your impact!",
+        "Impressive dedication! A faction would be lucky to have someone with your commitment!",
+        "Keep up the excellent work! Your potential could shine even brighter with a faction!",
+        "Outstanding effort! Think about which faction could benefit from your dedication!"
+      ]
+    };
+
+    const factionName = faction ? faction.name : "No Faction";
+    const messages = motivationalMessages[factionName] || motivationalMessages["No Faction"];
+    const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+
+    // Create faction-themed embed
+    const factionColors = {
+      "Laughing Meeks": 0xFF6B6B,
+      "Unicorn Rapists": 0x9B59B6,
+      "Special Activities Directive": 0x3498DB,
+      "No Faction": 0x95A5A6
+    };
+
+    const embed = new EmbedBuilder()
+      .setTitle("🏆 Session Complete!")
+      .setColor(factionColors[factionName])
+      .setDescription(randomMessage)
+      .addFields(
+        { name: "⏱️ Time Clocked", value: durationText, inline: true },
+        { name: "🏴 Faction", value: factionName, inline: true }
+      )
+      .setFooter({ text: "Every minute counts for your faction's glory!" })
+      .setTimestamp();
+
+    // Send DM to user
+    await member.send({ embeds: [embed] });
+    console.log(`📨 Sent motivational DM to ${member.user.username} (${durationText})`);
+    
+  } catch (error) {
+    // User might have DMs disabled or blocked the bot
+    console.log(`⚠️ Could not send DM to ${member.user.username}: ${error.message}`);
   }
 }
 
@@ -330,6 +423,15 @@ client.on("interactionCreate", async (interaction) => {
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
 
+    // Check if command requires factions and if they're disabled
+    const factionCommands = ['accept', 'deny', 'joinfaction', 'leavefaction', 'factionstats', 'timeleaderboard', 'factiontime', 'factions'];
+    if (factionCommands.includes(interaction.commandName) && !areFactionsEnabled(interaction.guild)) {
+      return interaction.reply({
+        content: "❌ Faction features are disabled in this server! Use `/togglefactions enabled:true` to enable them.",
+        ephemeral: true,
+      });
+    }
+
     try {
       await command.execute(interaction);
     } catch (err) {
@@ -350,6 +452,14 @@ client.on("interactionCreate", async (interaction) => {
     interaction.isStringSelectMenu() &&
     interaction.customId === "faction_select"
   ) {
+    // Check if factions are enabled for this guild
+    if (!areFactionsEnabled(interaction.guild)) {
+      return interaction.reply({
+        content: "❌ Faction features are disabled in this server!",
+        ephemeral: true,
+      });
+    }
+
     const user = interaction.user;
     const faction = interaction.values[0];
 
@@ -417,14 +527,39 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
       // Send clock-out message
       await sendClockOutMessage(member, oldState.channel, timeSpent);
+      
+      // Send motivational DM to user
+      await sendMotivationalDM(member, timeSpent);
 
-      // Update faction time tracking
-      const faction = getUserFaction(member);
-      if (faction && global.factionTimes[faction.key] !== undefined) {
-        global.factionTimes[faction.key] += timeSpent;
-        console.log(
-          `📊 Added ${formatDuration(timeSpent)} to ${faction.name} faction total`,
-        );
+      // Update faction time tracking (only if factions are enabled)
+      if (areFactionsEnabled(member.guild)) {
+        const faction = getUserFaction(member);
+        if (faction && global.factionTimes[faction.key] !== undefined) {
+          global.factionTimes[faction.key] += timeSpent;
+          console.log(
+            `📊 Added ${formatDuration(timeSpent)} to ${faction.name} faction total`,
+          );
+        }
+      }
+
+      // Update individual user time tracking
+      if (!global.userTimes[userId]) {
+        global.userTimes[userId] = {
+          totalTime: 0,
+          sessions: 0,
+          longestSession: 0,
+          todayTime: 0,
+          lastActive: null
+        };
+      }
+      
+      global.userTimes[userId].totalTime += timeSpent;
+      global.userTimes[userId].sessions += 1;
+      global.userTimes[userId].todayTime += timeSpent;
+      global.userTimes[userId].lastActive = Date.now();
+      
+      if (timeSpent > global.userTimes[userId].longestSession) {
+        global.userTimes[userId].longestSession = timeSpent;
       }
 
       delete global.timeTracking[userId];
@@ -452,13 +587,35 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
         timeSpent,
       );
 
-      // Update faction time tracking for the previous session
-      const faction = getUserFaction(member);
-      if (faction && global.factionTimes[faction.key] !== undefined) {
-        global.factionTimes[faction.key] += timeSpent;
-        console.log(
-          `📊 Added ${formatDuration(timeSpent)} to ${faction.name} faction total`,
-        );
+      // Update faction time tracking for the previous session (only if factions are enabled)
+      if (areFactionsEnabled(member.guild)) {
+        const faction = getUserFaction(member);
+        if (faction && global.factionTimes[faction.key] !== undefined) {
+          global.factionTimes[faction.key] += timeSpent;
+          console.log(
+            `📊 Added ${formatDuration(timeSpent)} to ${faction.name} faction total`,
+          );
+        }
+      }
+
+      // Update individual user time tracking
+      if (!global.userTimes[userId]) {
+        global.userTimes[userId] = {
+          totalTime: 0,
+          sessions: 0,
+          longestSession: 0,
+          todayTime: 0,
+          lastActive: null
+        };
+      }
+      
+      global.userTimes[userId].totalTime += timeSpent;
+      global.userTimes[userId].sessions += 1;
+      global.userTimes[userId].todayTime += timeSpent;
+      global.userTimes[userId].lastActive = Date.now();
+      
+      if (timeSpent > global.userTimes[userId].longestSession) {
+        global.userTimes[userId].longestSession = timeSpent;
       }
 
       // Start new tracking session for the new channel
