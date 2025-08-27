@@ -4,8 +4,11 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName("factions")
     .setDescription("Request to join a faction"),
-  
+
   async execute(interaction) {
+    // Ensure pendingRequests object exists
+    if (!global.pendingRequests) global.pendingRequests = {};
+
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId("faction_select")
@@ -18,9 +21,9 @@ module.exports = {
     );
 
     await interaction.reply({
-      content: "Select a faction to request joining. Leaders will be notified!",
+      content: "Choose a faction to request joining:",
       components: [row],
-      ephemeral: true
+      ephemeral: true,
     });
   },
 };
