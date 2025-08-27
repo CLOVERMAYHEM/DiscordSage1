@@ -1,11 +1,9 @@
 const { SlashCommandBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require("discord.js");
 
-// This command only shows a dropdown menu for faction requests
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("factions")
-    .setDescription("Shows the faction request menu."),
-
+    .setDescription("Request to join a faction."),
   async execute(interaction) {
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
@@ -19,7 +17,7 @@ module.exports = {
     );
 
     await interaction.reply({
-      content: "📢 Choose a faction to request joining. Leaders will be notified.",
+      content: "📢 Select a faction to **request** to join. Leaders will be notified for approval!",
       components: [row],
       ephemeral: true
     });
