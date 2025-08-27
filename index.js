@@ -3,7 +3,7 @@ require('dotenv').config();
 
 const fs = require("fs");
 const express = require("express");
-const { Client, Collection, GatewayIntentBits } = require("discord.js");
+const { Client, Collection, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder } = require("discord.js");
 
 // Initialize global storage
 if (!global.timeTracking) global.timeTracking = {};
@@ -40,7 +40,8 @@ client.commands = new Collection();
 const commandFiles = fs.readdirSync("./commands").filter(f => f.endsWith(".js"));
 for (const file of commandFiles) {
   const command = require(`./commands/${file}`);
-  client.commands.set(command.data.name, command);
+  if (command?.data?.name) client.commands.set(command.data.name, command);
+  else console.warn(`⚠️ Command file ${file} is missing 'data.name'`);
 }
 
 // Client ready
