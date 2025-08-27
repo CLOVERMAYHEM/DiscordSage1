@@ -1,18 +1,27 @@
-// Load environment variables from .env
+// Load environment variables
 require('dotenv').config();
 
 const fs = require("fs");
 const express = require("express");
 const { Client, Collection, GatewayIntentBits } = require("discord.js");
 
-// Time tracking storage (in production, use a database)
+// Initialize global storage
 if (!global.timeTracking) global.timeTracking = {};
 if (!global.factionTimes) global.factionTimes = {
   "Laughing_Meeks": 0,
   "Unicorn_Rapists": 0,
   "Special_Activities_Directive": 0
 };
+if (!global.pendingRequests) global.pendingRequests = {};
 if (!global.clockInChannelId) global.clockInChannelId = null;
+if (!global.notificationChannelId) global.notificationChannelId = null;
+
+// Faction leaders mapping
+global.factionLeaders = {
+  "Laughing_Meeks": "1406779732275499098",
+  "Unicorn_Rapists": "1406779912441823303",
+  "Special_Activities_Directive": "1409081159811334204",
+};
 
 // Initialize Discord client
 const client = new Client({
@@ -27,21 +36,14 @@ const client = new Client({
 
 client.commands = new Collection();
 
-// Load commands
+// Load command files
 const commandFiles = fs.readdirSync("./commands").filter(f => f.endsWith(".js"));
 for (const file of commandFiles) {
   const command = require(`./commands/${file}`);
   client.commands.set(command.data.name, command);
 }
 
-// Faction leader mapping
-const factionLeaders = {
-  "Laughing_Meeks": "1406779732275499098",
-  "Unicorn_Rapists": "1406779912441823303",
-  "Special_Activities_Directive": "1409081159811334204",
-};
-
-// Discord client ready event
+// Client ready
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
@@ -54,20 +56,13 @@ client.once("ready", async () => {
   try {
     console.log("🔄 Registering slash commands...");
     await client.application.commands.set(commands);
-    console.log("✅ Slash commands registered successfully!");
-  } catch (error) {
-    console.error("❌ Error registering commands:", error);
+    console.log("✅ Slash commands registered!");
+  } catch (err) {
+    console.error("❌ Error registering commands:", err);
   }
 
-  // Start daily leaderboard schedule
   startDailyLeaderboard();
-
-  // Start sticky message monitoring
-  const stickyModule = require('./commands/stick.js');
-  setInterval(() => {
-    stickyModule.checkStickyMessages(client);
-  }, 30000); // Check every 30 seconds
-  console.log("📌 Sticky message monitoring started");
+  console.log("📅 Daily leaderboard scheduling started");
 });
 
 // Daily leaderboard function
@@ -76,7 +71,7 @@ function startDailyLeaderboard() {
     const now = new Date();
     const tomorrow = new Date(now);
     tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-    tomorrow.setUTCHours(12, 0, 0, 0);
+    tomorrow.setUTCHours(12, 0, 0, 0); // 12:00 PM UTC
 
     const msUntilTomorrow = tomorrow.getTime() - now.getTime();
 
@@ -87,7 +82,6 @@ function startDailyLeaderboard() {
   };
 
   scheduleDaily();
-  console.log("📅 Daily leaderboard scheduled for 12:00 PM UTC");
 }
 
 async function sendDailyLeaderboard() {
@@ -100,26 +94,19 @@ async function sendDailyLeaderboard() {
     const clockInChannel = guild.channels.cache.get(global.clockInChannelId);
     if (!clockInChannel) return;
 
-    const factionTimes = global.factionTimes || {
-      "Laughing_Meeks": 0,
-      "Unicorn_Rapists": 0,
-      "Special_Activities_Directive": 0
-    };
-
     const factionData = [];
-    for (const [factionKey, totalTime] of Object.entries(factionTimes)) {
-      const factionDisplayName = factionKey.replace("_", " ");
-      const role = guild.roles.cache.find(r => r.name === factionDisplayName);
+    for (const [factionKey, totalTime] of Object.entries(global.factionTimes)) {
+      const factionDisplay = factionKey.replace("_", " ");
+      const role = guild.roles.cache.find(r => r.name === factionDisplay);
       const memberCount = role ? role.members.size : 0;
-
       const hours = Math.floor(totalTime / 3600000);
       const minutes = Math.floor((totalTime % 3600000) / 60000);
 
       factionData.push({
-        name: factionDisplayName,
-        totalTime: totalTime,
+        name: factionDisplay,
+        totalTime,
         timeString: `${hours}h ${minutes}m`,
-        memberCount: memberCount
+        memberCount
       });
     }
 
@@ -129,15 +116,12 @@ async function sendDailyLeaderboard() {
     factionData.forEach((faction, index) => {
       const medals = ["🥇", "🥈", "🥉"];
       const medal = medals[index] || "🏅";
-
-      leaderboardText += `${medal} **${faction.name}**\n`;
-      leaderboardText += `⏱️ ${faction.timeString} | 👥 ${faction.memberCount} members\n\n`;
+      leaderboardText += `${medal} **${faction.name}**\n⏱️ ${faction.timeString} | 👥 ${faction.memberCount} members\n\n`;
     });
 
     const totalTime = factionData.reduce((sum, f) => sum + f.totalTime, 0);
     const totalHours = Math.floor(totalTime / 3600000);
     const totalMinutes = Math.floor((totalTime % 3600000) / 60000);
-
     leaderboardText += `📈 **Combined Faction Time**: ${totalHours}h ${totalMinutes}m\n`;
     leaderboardText += `🏆 **Today's Champion**: ${factionData[0]?.name || "None"}\n\n`;
     leaderboardText += `*Use \`/timeleaderboard\` anytime to see current standings*`;
@@ -151,91 +135,111 @@ async function sendDailyLeaderboard() {
     };
 
     await clockInChannel.send({ embeds: [embed] });
-    console.log("📊 Daily leaderboard sent successfully");
-  } catch (error) {
-    console.error("❌ Error sending daily leaderboard:", error);
+  } catch (err) {
+    console.error("❌ Error sending daily leaderboard:", err);
   }
 }
 
-// Handle interactions (commands + dropdowns)
+// Slash command handling
 client.on("interactionCreate", async interaction => {
   if (interaction.isChatInputCommand()) {
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
+
     try {
       await command.execute(interaction);
     } catch (err) {
       console.error(err);
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "❌ Error running this command.", ephemeral: true });
+        try {
+          await interaction.reply({ content: "❌ Error running this command.", ephemeral: true });
+        } catch {}
       }
     }
   }
 
-  // Faction request handling
+  // Faction select menu
   if (interaction.isStringSelectMenu() && interaction.customId === "faction_select") {
-    const faction = interaction.values[0];
     const user = interaction.user;
+    const faction = interaction.values[0];
 
-    if (!global.pendingRequests) global.pendingRequests = {};
     global.pendingRequests[user.id] = faction;
 
-    const leaderRoleId = factionLeaders[faction];
-    if (!leaderRoleId) return interaction.reply({ content: "❌ No leader role set for this faction.", ephemeral: true });
+    const leaderRoleId = global.factionLeaders[faction];
+    if (!leaderRoleId)
+      return interaction.reply({ content: "❌ No leader role set for this faction.", ephemeral: true });
 
     const leaderRole = interaction.guild.roles.cache.get(leaderRoleId);
-    if (!leaderRole) return interaction.reply({ content: "❌ Leader role not found in this server.", ephemeral: true });
+    if (!leaderRole)
+      return interaction.reply({ content: "❌ Leader role not found in this server.", ephemeral: true });
 
-    let targetChannel = interaction.guild.channels.cache.get(global.notificationChannelId) || interaction.guild.channels.cache.find(c => c.type === 0);
-    if (!targetChannel) return interaction.reply({ content: "❌ No text channel found to send notifications!", ephemeral: true });
+    const targetChannel =
+      interaction.guild.channels.cache.get(global.notificationChannelId) ||
+      interaction.guild.channels.cache.find(c => c.type === 0);
 
-    targetChannel.send(`📢 <@&${leaderRoleId}> **Faction Request Alert!**
-<@${user.id}> requested to join **${faction.replace("_", " ")}**.
-Use \`/accept @${user.username}\` or \`/deny @${user.username}\` to respond.`);
+    if (!targetChannel)
+      return interaction.reply({ content: "❌ No text channel found to send notifications!", ephemeral: true });
 
-    await interaction.reply({ content: `✅ Your request to join **${faction.replace("_", " ")}** has been sent to the leaders.`, ephemeral: true });
+    targetChannel.send(
+      `📢 <@&${leaderRoleId}> **Faction Request Alert!**\n\n<@${user.id}> requested to join **${faction.replace("_", " ")}**!\n\nUse \`/accept @${user.username}\` or \`/deny @${user.username}\``
+    );
+
+    await interaction.reply({
+      content: `✅ Request sent! Leaders have been notified.`,
+      ephemeral: true
+    });
+  }
+});
+
+// Voice channel tracking
+client.on("voiceStateUpdate", async (oldState, newState) => {
+  const member = newState.member;
+  const userId = member.id;
+
+  // Join
+  if (!oldState.channel && newState.channel) {
+    global.timeTracking[userId] = {
+      startTime: Date.now(),
+      channel: newState.channel.name,
+      channelId: newState.channel.id
+    };
+    console.log(`🕐 Started tracking ${member.user.username} in ${newState.channel.name}`);
   }
 
-  // Other interactions (battle buttons, reset, etc.) are unchanged
+  // Leave or switch
+  if ((oldState.channel && !newState.channel) || (oldState.channel && newState.channel && oldState.channel.id !== newState.channel.id)) {
+    if (!global.timeTracking[userId]) return;
+
+    const session = global.timeTracking[userId];
+    const timeSpent = Date.now() - session.startTime;
+
+    // Determine faction
+    const factions = ["Laughing Meeks", "Unicorn Rapists", "Special Activities Directive"];
+    let userFaction = null;
+    for (const factionName of factions) {
+      const role = member.guild.roles.cache.find(r => r.name === factionName);
+      if (role && member.roles.cache.has(role.id)) {
+        userFaction = factionName.replace(" ", "_");
+        break;
+      }
+    }
+
+    if (userFaction && global.factionTimes[userFaction] !== undefined) {
+      global.factionTimes[userFaction] += timeSpent;
+    }
+
+    delete global.timeTracking[userId];
+    console.log(`📊 Logged ${member.user.username}'s session in ${session.channel}`);
+  }
 });
 
-// Voice channel tracking (unchanged)
-client.on("voiceStateUpdate", async (oldState, newState) => {
-  // All your previous voice tracking logic remains here
-  // No changes needed for faction request fixes
-});
-
-// Express server for uptime
+// Express server
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.get("/", (req, res) => {
-  res.json({
-    status: "✅ Bot is running",
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
-    guilds: client.guilds ? client.guilds.cache.size : 0,
-    botTag: client.user ? client.user.tag : "Not logged in yet"
-  });
-});
+app.get("/", (req, res) => res.json({ status: "✅ Bot running" }));
+app.get("/health", (req, res) => res.json({ status: "healthy" }));
+app.listen(PORT, "0.0.0.0", () => console.log(`🌐 Web server running on port ${PORT}`));
 
-app.get("/health", (req, res) => res.json({ status: "healthy", uptime: process.uptime() }));
-app.get("/ping", (req, res) => res.send("pong"));
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🌐 Web server running on port ${PORT}`);
-  console.log(`📡 Ready for UptimeRobot monitoring`);
-});
-
-// Error handling & graceful shutdown
-client.on('error', console.error);
-client.on('warn', console.warn);
-process.on('unhandledRejection', (reason, promise) => console.error('Unhandled Rejection at:', promise, 'reason:', reason));
-process.on('SIGINT', () => {
-  console.log('\n🛑 Shutting down gracefully...');
-  client.destroy();
-  process.exit(0);
-});
-
-// Log in with environment variable
+// Login
 client.login(process.env.DISCORD_TOKEN);
