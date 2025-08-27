@@ -12,6 +12,11 @@ module.exports = {
     const targetUser = interaction.options.getUser("user") || interaction.user;
     const member = await interaction.guild.members.fetch(targetUser.id);
     
+    // Check if factions are enabled for faction-related features
+    const factionsEnabled = global.guildSettings && 
+                            global.guildSettings[interaction.guild.id] && 
+                            global.guildSettings[interaction.guild.id].factionsEnabled !== false;
+    
     // Initialize user time tracking if not exists
     if (!global.userTimes) global.userTimes = {};
     if (!global.userTimes[targetUser.id]) {
@@ -34,19 +39,21 @@ module.exports = {
     const todayHours = Math.floor(userData.todayTime / 3600000);
     const todayMinutes = Math.floor((userData.todayTime % 3600000) / 60000);
     
-    // Get user's faction
-    const factions = [
-      "Laughing Meeks",
-      "Unicorn Rapists", 
-      "Special Activities Directive"
-    ];
-    
+    // Get user's faction (only if factions are enabled)
     let userFaction = "None";
-    for (const factionName of factions) {
-      const role = interaction.guild.roles.cache.find(r => r.name === factionName);
-      if (role && member.roles.cache.has(role.id)) {
-        userFaction = factionName;
-        break;
+    if (factionsEnabled) {
+      const factions = [
+        "Laughing Meeks",
+        "Unicorn Rapists", 
+        "Special Activities Directive"
+      ];
+      
+      for (const factionName of factions) {
+        const role = interaction.guild.roles.cache.find(r => r.name === factionName);
+        if (role && member.roles.cache.has(role.id)) {
+          userFaction = factionName;
+          break;
+        }
       }
     }
     
