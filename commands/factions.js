@@ -3,27 +3,18 @@ const { SlashCommandBuilder, ActionRowBuilder, StringSelectMenuBuilder } = requi
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("factions")
-    .setDescription("Request to join a faction"),
-
+    .setDescription("Shows the faction join menu."),
   async execute(interaction) {
-    // Ensure pendingRequests object exists
-    if (!global.pendingRequests) global.pendingRequests = {};
-
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId("faction_select")
-        .setPlaceholder("Select a faction to request")
+        .setPlaceholder("Select a faction")
         .addOptions([
           { label: "Laughing Meeks", value: "Laughing_Meeks" },
           { label: "Unicorn Rapists", value: "Unicorn_Rapists" },
           { label: "Special Activities Directive", value: "Special_Activities_Directive" },
         ])
     );
-
-    await interaction.reply({
-      content: "Choose a faction to request joining:",
-      components: [row],
-      ephemeral: true,
-    });
+    await interaction.reply({ content: "Choose a faction to join:", components: [row], flags: 64 });
   },
 };
