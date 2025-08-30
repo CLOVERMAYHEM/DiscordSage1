@@ -10,6 +10,7 @@ const {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   EmbedBuilder,
+  PermissionFlagsBits,
 } = require("discord.js");
 
 // Initialize global storage
@@ -25,6 +26,7 @@ if (!global.pendingRequests) global.pendingRequests = {};
 if (!global.clockInChannelId) global.clockInChannelId = null;
 if (!global.notificationChannelId) global.notificationChannelId = null;
 if (!global.guildSettings) global.guildSettings = {};
+if (!global.warnChannelId) global.warnChannelId = null; // New variable for invite warnings
 
 // Faction leaders mapping
 global.factionLeaders = {
@@ -643,6 +645,81 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     }
   }
 });
+
+// New Event Listener for Message Content
+client.on("messageCreate", async (message) => {
+  // Ignore messages from bots to prevent an infinite loop
+  if (message.author.bot) return;
+
+  // Regular expression to detect common Discord invite links
+  const inviteRegex = /(https?:\/\/)?(www\.)?(discord\.(gg|io|me|li)|discordapp\.com\/invite)\/[a-zA-Z0-9-]{1,}/g;
+
+  // Check if the message content contains an invite link
+  if (inviteRegex.test(message.content)) {
+    // A flag to ensure we only warn the user once per message
+    let alreadyWarned = false;
+    
+    // Check if the link is to this server, if so, ignore it
+    const invites = await message.guild.invites.fetch();
+    const isThisServerInvite = invites.some(invite => message.content.includes(invite.code));
+    
+    if (isThisServerInvite) {
+      // It's an invite to the same server, so do nothing.
+      return;
+    }
+
+    try {
+      // 1. Delete the message
+      if (message.deletable) {
+        await message.delete();
+      }
+
+      // 2. Warn the user via a DM
+      if (!alreadyWarned) {
+        await message.author.send({
+          content: `⚠️ Your message was deleted in **${message.guild.name}** because it contained a Discord invite link.`,
+          embeds: [{
+            title: "🚫 Discord Invite Link Detected",
+            description: `**Your message:**\n${message.content}`,
+            color: 0xffa500,
+            footer: {
+              text: "Please do not share invite links to other servers."
+            },
+            timestamp: new Date().toISOString()
+          }]
+        }).catch(err => {
+          console.error(`❌ Could not DM user ${message.author.tag}: ${err}`);
+          // If the DM fails, you can still send the public warning
+        });
+        alreadyWarned = true;
+      }
+      
+      // 3. Send a warning to the designated channel
+      if (global.warnChannelId) {
+        const warnChannel = message.guild.channels.cache.get(global.warnChannelId);
+        if (warnChannel) {
+          const warningEmbed = new EmbedBuilder()
+            .setTitle("🚫 Invite Link Warning")
+            .setColor(0xffa500)
+            .setAuthor({
+              name: message.author.tag,
+              iconURL: message.author.displayAvatarURL(),
+            })
+            .setDescription(`**User:** ${message.author}\n**Channel:** ${message.channel}\n**Deleted Message Content:**\n\`\`\`\n${message.content.substring(0, 1020)}\n\`\`\``)
+            .setTimestamp()
+            .setFooter({ text: "Auto-Moderation System" });
+
+          await warnChannel.send({ embeds: [warningEmbed] });
+          console.log(`📝 Sent invite link warning for ${message.author.tag}`);
+        }
+      }
+
+    } catch (error) {
+      console.error("❌ Error handling invite link:", error);
+    }
+  }
+});
+// End of New Event Listener
 
 // Express server
 const app = express();
