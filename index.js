@@ -550,7 +550,6 @@ client.on("guildMemberAdd", async (member) => {
         .setColor(0x00FF00)
         .setDescription(`Welcome <@${member.id}>! We're excited to have you as part of our community.`)
         .addFields(
-          { name: "🏴 Join a Faction", value: "Use `/factions` to join one of our three factions and start your adventure!", inline: false },
           { name: "❓ Need Help?", value: "Use `/help` to see all available commands and features.", inline: false },
           { name: "📊 Member Number", value: `You are member #${memberCount}!`, inline: true }
         )
