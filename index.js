@@ -502,6 +502,84 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
+// Welcome new members
+client.on("guildMemberAdd", async (member) => {
+  const guildId = member.guild.id;
+
+  // Check if welcome channel is set for this guild
+  if (!global.guildSettings || !global.guildSettings[guildId] || !global.guildSettings[guildId].welcomeChannelId) {
+    return; // No welcome channel set
+  }
+
+  const welcomeChannelId = global.guildSettings[guildId].welcomeChannelId;
+  const welcomeChannel = member.guild.channels.cache.get(welcomeChannelId);
+
+  if (!welcomeChannel) {
+    console.warn(`⚠️ Welcome channel not found: ${welcomeChannelId}`);
+    return;
+  }
+
+  try {
+    // Force fetch the user to ensure banner data is available
+    await member.user.fetch({ force: true });
+
+    // Get member count
+    const memberCount = member.guild.memberCount;
+
+    // Create the welcome embed for the public channel
+    const welcomeEmbed = new EmbedBuilder()
+      .setColor(0x00FF00)
+      .setDescription(`Welcome <@${member.id}> to **${member.guild.name}**! You are the ${memberCount}${getOrdinalSuffix(memberCount)} member!`)
+      .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+      .setTimestamp()
+      .setFooter({ text: `User: ${member.user.tag}` });
+
+    // Fetch the user's banner URL and add it to the embed if it exists
+    const bannerURL = member.user.bannerURL({ dynamic: true, size: 512 });
+    if (bannerURL) {
+      welcomeEmbed.setImage(bannerURL);
+    }
+
+    // Send the rich welcome message to the channel
+    await welcomeChannel.send({ embeds: [welcomeEmbed] });
+
+    // Send welcome DM (this logic remains unchanged)
+    try {
+      const dmEmbed = new EmbedBuilder()
+        .setTitle(`🎉 Welcome to ${member.guild.name}!`)
+        .setColor(0x00FF00)
+        .setDescription(`Welcome <@${member.id}>! We're excited to have you as part of our community.`)
+        .addFields(
+          { name: "🏴 Join a Faction", value: "Use `/factions` to join one of our three factions and start your adventure!", inline: false },
+          { name: "❓ Need Help?", value: "Use `/help` to see all available commands and features.", inline: false },
+          { name: "📊 Member Number", value: `You are member #${memberCount}!`, inline: true }
+        )
+        .setThumbnail(member.guild.iconURL())
+        .setFooter({ text: "Welcome to the community!" })
+        .setTimestamp();
+      
+      await member.send({ embeds: [dmEmbed] });
+      console.log(`📨 Sent welcome DM to ${member.user.username}`);
+    } catch (error) {
+      console.log(`⚠️ Could not send DM to ${member.user.username}: ${error.message}`);
+    }
+    
+    console.log(`👋 Welcomed ${member.user.username} to ${member.guild.name} (Member #${memberCount})`);
+  } catch (error) {
+    console.error(`❌ Error sending welcome message:`, error);
+  }
+});
+
+// Helper function for ordinal numbers
+function getOrdinalSuffix(number) {
+  const j = number % 10;
+  const k = number % 100;
+  if (j == 1 && k != 11) return "st";
+  if (j == 2 && k != 12) return "nd";
+  if (j == 3 && k != 13) return "rd";
+  return "th";
+}
+
 // Enhanced voice channel tracking with clock-in/clock-out messages
 client.on("voiceStateUpdate", async (oldState, newState) => {
   const member = newState.member;
