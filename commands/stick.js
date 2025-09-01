@@ -1,12 +1,13 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require("discord.js");
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits, ChannelType } = require("discord.js");
 
 // Store sticky messages
 if (!global.stickyMessages) global.stickyMessages = {};
+if (!global.messageCounters) global.messageCounters = {};
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("stick")
-    .setDescription("Create a sticky message that stays visible in the channel")
+    .setDescription("Create a sticky message that reposts every 3 messages")
     .addStringOption(option =>
       option.setName("message")
         .setDescription("The message to stick")
@@ -14,7 +15,8 @@ module.exports = {
     .addChannelOption(option =>
       option.setName("channel")
         .setDescription("Channel to stick the message in (default: current)")
-        .setRequired(false))
+        .setRequired(false)
+        .addChannelTypes(ChannelType.GuildText))
     .addStringOption(option =>
       option.setName("style")
         .setDescription("Message style")
@@ -40,7 +42,7 @@ module.exports = {
     }
     
     // Check if it's a text channel
-    if (targetChannel.type !== 0) {
+    if (targetChannel.type !== ChannelType.GuildText) {
       return interaction.reply({ 
         content: "❌ Sticky messages can only be used in text channels!", 
         ephemeral: true 
@@ -64,11 +66,11 @@ module.exports = {
       .setColor(styleConfig.color)
       .addFields({
         name: "📌 Sticky Message",
-        value: "This message will automatically reappear when it scrolls out of view.",
+        value: "This message will automatically reappear every 3 messages.",
         inline: false
       })
       .setFooter({ 
-        text: `Sticky message by ${interaction.user.username} • This message will stay visible`,
+        text: `Sticky message by ${interaction.user.username} • Will repost every 3 messages`,
         iconURL: interaction.user.displayAvatarURL()
       })
       .setTimestamp();
@@ -97,8 +99,13 @@ module.exports = {
         lastReposted: Date.now()
       };
       
+      // Initialize message counter for this channel
+      global.messageCounters[targetChannel.id] = 0;
+      
+      console.log(`✅ Created sticky message in ${targetChannel.name} (${targetChannel.id})`);
+      
       await interaction.reply({ 
-        content: `✅ Sticky message created in ${targetChannel}! It will automatically repost when it scrolls out of view.`,
+        content: `✅ Sticky message created in ${targetChannel}! It will automatically repost every 3 messages.`,
         ephemeral: true 
       });
       
@@ -111,61 +118,6 @@ module.exports = {
     }
   },
 };
-
-// Function to check if sticky message needs reposting
-async function checkStickyMessages(client) {
-  for (const [channelId, stickyData] of Object.entries(global.stickyMessages)) {
-    try {
-      const channel = client.channels.cache.get(channelId);
-      if (!channel) continue;
-      
-      // Get recent messages
-      const messages = await channel.messages.fetch({ limit: 10 });
-      const stickyMessage = messages.get(stickyData.messageId);
-      
-      // If sticky message is not in recent 10 messages, repost it
-      if (!stickyMessage) {
-        await repostStickyMessage(channel, channelId, stickyData);
-      }
-    } catch (error) {
-      console.error(`Error checking sticky message in ${channelId}:`, error);
-    }
-  }
-}
-
-async function repostStickyMessage(channel, channelId, stickyData) {
-  const styles = {
-    info: { color: 0x3498DB, emoji: "🎯", title: "Information" },
-    warning: { color: 0xF39C12, emoji: "⚠️", title: "Warning" },
-    important: { color: 0xE74C3C, emoji: "🚨", title: "Important Notice" },
-    announcement: { color: 0x9B59B6, emoji: "📢", title: "Announcement" },
-    event: { color: 0x2ECC71, emoji: "🎉", title: "Event" }
-  };
-  
-  const styleConfig = styles[stickyData.style];
-  const user = await channel.client.users.fetch(stickyData.author);
-  
-  const embed = new EmbedBuilder()
-    .setTitle(`${styleConfig.emoji} ${styleConfig.title}`)
-    .setDescription(stickyData.content)
-    .setColor(styleConfig.color)
-    .addFields({
-      name: "📌 Sticky Message",
-      value: "This message will automatically reappear when it scrolls out of view.",
-      inline: false
-    })
-    .setFooter({ 
-      text: `Sticky message by ${user.username} • Reposted automatically`,
-      iconURL: user.displayAvatarURL()
-    })
-    .setTimestamp();
-  
-  const newMessage = await channel.send({ embeds: [embed] });
-  
-  // Update stored message ID
-  global.stickyMessages[channelId].messageId = newMessage.id;
-  global.stickyMessages[channelId].lastReposted = Date.now();
-}
 
 // Check bot admin status
 async function isUserBotAdmin(member) {
@@ -182,5 +134,4 @@ async function isUserBotAdmin(member) {
 }
 
 // Export functions for use in main bot file
-module.exports.checkStickyMessages = checkStickyMessages;
 module.exports.isUserBotAdmin = isUserBotAdmin;
