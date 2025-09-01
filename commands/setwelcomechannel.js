@@ -13,9 +13,10 @@ module.exports = {
         .setName("channel")
         .setDescription("The channel to send welcome messages to")
         .setRequired(true)
-        .addChannelTypes(ChannelType.GuildText),
+        .addChannelTypes(ChannelType.GuildText) // ✅ fixed (no trailing comma)
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
   async execute(interaction) {
     const channel = interaction.options.getChannel("channel");
 
@@ -35,7 +36,7 @@ module.exports = {
       });
     }
 
-    // Check if it's a text channel (Discord.js v14 uses numeric values)
+    // Check if it's a text channel
     if (channel.type !== ChannelType.GuildText) {
       return interaction.reply({
         content: "❌ Please select a text channel!",
