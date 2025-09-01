@@ -11,6 +11,7 @@ const {
   StringSelectMenuBuilder,
   EmbedBuilder,
   PermissionFlagsBits,
+  ChannelType,
 } = require("discord.js");
 
 // Initialize global storage
@@ -26,7 +27,9 @@ if (!global.pendingRequests) global.pendingRequests = {};
 if (!global.clockInChannelId) global.clockInChannelId = null;
 if (!global.notificationChannelId) global.notificationChannelId = null;
 if (!global.guildSettings) global.guildSettings = {};
-if (!global.warnChannelId) global.warnChannelId = null; // New variable for invite warnings
+if (!global.warnChannelId) global.warnChannelId = null;
+if (!global.stickyMessages) global.stickyMessages = {};
+if (!global.messageCounters) global.messageCounters = {}; // Track messages per channel for sticky system
 
 // Faction leaders mapping
 global.factionLeaders = {
@@ -58,6 +61,9 @@ for (const file of commandFiles) {
   else console.warn(`⚠️ Command file ${file} is missing 'data.name'`);
 }
 
+// Import sticky message functions
+const { checkStickyMessages, isUserBotAdmin } = require('./commands/stick.js');
+
 // Utility function to format time duration
 function formatDuration(milliseconds) {
   const totalSeconds = Math.floor(milliseconds / 1000);
@@ -82,7 +88,8 @@ function areFactionsEnabled(guild) {
     global.guildSettings[guildId] = {
       factionsEnabled: true,
       clockInChannelId: null,
-      notificationChannelId: null
+      notificationChannelId: null,
+      welcomeChannelId: null
     };
   }
   return global.guildSettings[guildId].factionsEnabled;
@@ -322,6 +329,123 @@ async function sendChannelSwitchMessage(
   }
 }
 
+// Handle new messages for sticky message system
+async function handleStickyMessageCheck(message) {
+  // Skip bot messages and non-text channels
+  if (message.author.bot || message.channel.type !== ChannelType.GuildText) {
+    return;
+  }
+
+  const channelId = message.channel.id;
+  
+  // Check if there's a sticky message for this channel
+  if (!global.stickyMessages[channelId]) {
+    return;
+  }
+
+  // Skip if this message is the sticky message itself to prevent infinite loops
+  if (message.id === global.stickyMessages[channelId].messageId) {
+    return;
+  }
+
+  // Initialize message counter for this channel if it doesn't exist
+  if (typeof global.messageCounters[channelId] !== 'number') {
+    global.messageCounters[channelId] = 0;
+  }
+
+  // Increment message counter
+  global.messageCounters[channelId]++;
+
+  console.log(`📊 Message count in ${message.channel.name}: ${global.messageCounters[channelId]}/3`);
+
+  // Check if we've reached 3 messages since last sticky repost
+  if (global.messageCounters[channelId] >= 3) {
+    try {
+      // Reset counter first
+      global.messageCounters[channelId] = 0;
+      
+      // Repost sticky message
+      await repostStickyMessage(message.channel, channelId, global.stickyMessages[channelId]);
+      
+      console.log(`📌 Reposted sticky message in ${message.channel.name} after 3 messages`);
+    } catch (error) {
+      console.error(`❌ Error reposting sticky message in ${channelId}:`, error);
+      // If reposting fails, remove the sticky message to prevent further errors
+      delete global.stickyMessages[channelId];
+      delete global.messageCounters[channelId];
+    }
+  }
+}
+
+// Repost sticky message function
+async function repostStickyMessage(channel, channelId, stickyData) {
+  const styles = {
+    info: { color: 0x3498DB, emoji: "🎯", title: "Information" },
+    warning: { color: 0xF39C12, emoji: "⚠️", title: "Warning" },
+    important: { color: 0xE74C3C, emoji: "🚨", title: "Important Notice" },
+    announcement: { color: 0x9B59B6, emoji: "📢", title: "Announcement" },
+    event: { color: 0x2ECC71, emoji: "🎉", title: "Event" }
+  };
+  
+  const styleConfig = styles[stickyData.style] || styles.info;
+  
+  try {
+    // First delete old sticky message if it exists
+    if (stickyData.messageId) {
+      try {
+        const oldMessage = await channel.messages.fetch(stickyData.messageId);
+        if (oldMessage) {
+          await oldMessage.delete();
+          console.log(`🗑️ Deleted old sticky message in ${channel.name}`);
+        }
+      } catch (error) {
+        console.log(`⚠️ Could not delete old sticky message: ${error.message}`);
+        // Continue anyway, old message might already be deleted
+      }
+    }
+
+    // Fetch user for footer
+    let user;
+    try {
+      user = await channel.client.users.fetch(stickyData.author);
+    } catch (error) {
+      console.log(`⚠️ Could not fetch sticky message author: ${error.message}`);
+      user = { username: "Unknown User", displayAvatarURL: () => null };
+    }
+    
+    const embed = new EmbedBuilder()
+      .setTitle(`${styleConfig.emoji} ${styleConfig.title}`)
+      .setDescription(stickyData.content)
+      .setColor(styleConfig.color)
+      .addFields({
+        name: "📌 Sticky Message",
+        value: "This message will automatically reappear every 3 messages.",
+        inline: false
+      })
+      .setFooter({ 
+        text: `Sticky message by ${user.username} • Reposted automatically`,
+        iconURL: user.displayAvatarURL ? user.displayAvatarURL() : null
+      })
+      .setTimestamp();
+
+    // Send new sticky message
+    const newMessage = await channel.send({ embeds: [embed] });
+    console.log(`✅ Posted new sticky message in ${channel.name}`);
+    
+    // Update stored message ID and timestamp
+    global.stickyMessages[channelId].messageId = newMessage.id;
+    global.stickyMessages[channelId].lastReposted = Date.now();
+    
+  } catch (error) {
+    console.error(`❌ Error in repostStickyMessage for ${channel.name}:`, error);
+    // If we can't send the message, remove the sticky to prevent further errors
+    delete global.stickyMessages[channelId];
+    delete global.messageCounters[channelId];
+    console.log(`🧹 Removed broken sticky message from ${channel.name}`);
+    throw error; // Re-throw so caller knows it failed
+  }
+}
+
 // Client ready
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
@@ -342,6 +466,13 @@ client.once("ready", async () => {
 
   startDailyLeaderboard();
   console.log("📅 Daily leaderboard scheduling started");
+  console.log("📌 Sticky message system initialized");
+});
+
+// Message event handler
+client.on("messageCreate", async (message) => {
+  // Handle sticky message checking
+  await handleStickyMessageCheck(message);
 });
 
 // Daily leaderboard function
@@ -391,427 +522,199 @@ async function sendDailyLeaderboard() {
 
     factionData.sort((a, b) => b.totalTime - a.totalTime);
 
-    let leaderboardText = "**📊 Daily Faction Time Rankings**\n\n";
+    const embed = new EmbedBuilder()
+      .setTitle("📊 Daily Faction Leaderboard")
+      .setColor(0x3498db)
+      .setDescription("Here are today's faction activity standings!")
+      .setTimestamp()
+      .setFooter({ text: "Daily Leaderboard • Updates every 24 hours" });
+
     factionData.forEach((faction, index) => {
-      const medals = ["🥇", "🥈", "🥉"];
-      const medal = medals[index] || "🏅";
-      leaderboardText += `${medal} **${faction.name}**\n⏱️ ${faction.timeString} | 👥 ${faction.memberCount} members\n\n`;
+      const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : "🥉";
+      embed.addFields({
+        name: `${medal} ${faction.name}`,
+        value: `⏱️ **${faction.timeString}**\n👥 ${faction.memberCount} members`,
+        inline: true,
+      });
     });
-
-    const totalTime = factionData.reduce((sum, f) => sum + f.totalTime, 0);
-    const totalHours = Math.floor(totalTime / 3600000);
-    const totalMinutes = Math.floor((totalTime % 3600000) / 60000);
-    leaderboardText += `📈 **Combined Faction Time**: ${totalHours}h ${totalMinutes}m\n`;
-    leaderboardText += `🏆 **Today's Champion**: ${factionData[0]?.name || "None"}\n\n`;
-    leaderboardText += `*Use \`/timeleaderboard\` anytime to see current standings*`;
-
-    const embed = {
-      color: 0xffd700,
-      title: "🎯 Daily Faction Voice Time Report",
-      description: leaderboardText,
-      timestamp: new Date().toISOString(),
-      footer: { text: "Keep up the great work, faction warriors!" },
-    };
 
     await clockInChannel.send({ embeds: [embed] });
-  } catch (err) {
-    console.error("❌ Error sending daily leaderboard:", err);
-  }
-}
+    console.log("📊 Daily leaderboard sent");
 
-// Slash command handling
-client.on("interactionCreate", async (interaction) => {
-  if (interaction.isChatInputCommand()) {
-    const command = client.commands.get(interaction.commandName);
-    if (!command) return;
-
-    // Check if command requires factions and if they're disabled
-    const factionCommands = ['accept', 'deny', 'joinfaction', 'leavefaction', 'factionstats', 'timeleaderboard', 'factiontime', 'factions'];
-    if (factionCommands.includes(interaction.commandName) && !areFactionsEnabled(interaction.guild)) {
-      return interaction.reply({
-        content: "❌ Faction features are disabled in this server! Use `/togglefactions enabled:true` to enable them.",
-        ephemeral: true,
-      });
+    // Reset daily times
+    for (const key of Object.keys(global.factionTimes)) {
+      global.factionTimes[key] = 0;
     }
+    global.userTimes = {};
 
-    try {
-      await command.execute(interaction);
-    } catch (err) {
-      console.error(err);
-      if (!interaction.replied && !interaction.deferred) {
-        try {
-          await interaction.reply({
-            content: "❌ Error running this command.",
-            ephemeral: true,
-          });
-        } catch {}
-      }
-    }
-  }
-
-  // Faction select menu
-  if (
-    interaction.isStringSelectMenu() &&
-    interaction.customId === "faction_select"
-  ) {
-    // Check if factions are enabled for this guild
-    if (!areFactionsEnabled(interaction.guild)) {
-      return interaction.reply({
-        content: "❌ Faction features are disabled in this server!",
-        ephemeral: true,
-      });
-    }
-
-    const user = interaction.user;
-    const faction = interaction.values[0];
-
-    global.pendingRequests[user.id] = faction;
-
-    const leaderRoleId = global.factionLeaders[faction];
-    if (!leaderRoleId)
-      return interaction.reply({
-        content: "❌ No leader role set for this faction.",
-        ephemeral: true,
-      });
-
-    const leaderRole = interaction.guild.roles.cache.get(leaderRoleId);
-    if (!leaderRole)
-      return interaction.reply({
-        content: "❌ Leader role not found in this server.",
-        ephemeral: true,
-      });
-
-    const targetChannel =
-      interaction.guild.channels.cache.get(global.notificationChannelId) ||
-      interaction.guild.channels.cache.find((c) => c.type === 0);
-
-    if (!targetChannel)
-      return interaction.reply({
-        content: "❌ No text channel found to send notifications!",
-        ephemeral: true,
-      });
-
-    targetChannel.send(
-      `📢 <@&${leaderRoleId}> **Faction Request Alert!**\n\n<@${user.id}> requested to join **${faction.replace("_", " ")}**!\n\nUse \`/accept @${user.username}\` or \`/deny @${user.username}\``,
-    );
-
-    await interaction.reply({
-      content: `✅ Request sent! Leaders have been notified.`,
-      ephemeral: true,
-    });
-  }
-});
-
-// Welcome new members
-client.on("guildMemberAdd", async (member) => {
-  const guildId = member.guild.id;
-
-  // Check if welcome channel is set for this guild
-  if (!global.guildSettings || !global.guildSettings[guildId] || !global.guildSettings[guildId].welcomeChannelId) {
-    return; // No welcome channel set
-  }
-
-  const welcomeChannelId = global.guildSettings[guildId].welcomeChannelId;
-  const welcomeChannel = member.guild.channels.cache.get(welcomeChannelId);
-
-  if (!welcomeChannel) {
-    console.warn(`⚠️ Welcome channel not found: ${welcomeChannelId}`);
-    return;
-  }
-
-  try {
-    // Force fetch the user to ensure banner data is available
-    await member.user.fetch({ force: true });
-
-    // Get member count
-    const memberCount = member.guild.memberCount;
-
-    // Create the welcome embed for the public channel
-    const welcomeEmbed = new EmbedBuilder()
-      .setColor(0x00FF00)
-      .setDescription(`Welcome <@${member.id}> to **${member.guild.name}**! You are the ${memberCount}${getOrdinalSuffix(memberCount)} member!`)
-      .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
-      .setTimestamp()
-      .setFooter({ text: `User: ${member.user.tag}` });
-
-    // Fetch the user's banner URL and add it to the embed if it exists
-    const bannerURL = member.user.bannerURL({ dynamic: true, size: 512 });
-    if (bannerURL) {
-      welcomeEmbed.setImage(bannerURL);
-    }
-
-    // Send the rich welcome message to the channel
-    await welcomeChannel.send({ embeds: [welcomeEmbed] });
-
-    // Send welcome DM (this logic remains unchanged)
-    try {
-      const dmEmbed = new EmbedBuilder()
-        .setTitle(`🎉 Welcome to ${member.guild.name}!`)
-        .setColor(0x00FF00)
-        .setDescription(`Welcome <@${member.id}>! We're excited to have you as part of our community.`)
-        .addFields(
-          { name: "❓ Need Help?", value: "Use `/help` to see all available commands and features.", inline: false },
-          { name: "📊 Member Number", value: `You are member #${memberCount}!`, inline: true }
-        )
-        .setThumbnail(member.guild.iconURL())
-        .setFooter({ text: "Welcome to the community!" })
-        .setTimestamp();
-      
-      await member.send({ embeds: [dmEmbed] });
-      console.log(`📨 Sent welcome DM to ${member.user.username}`);
-    } catch (error) {
-      console.log(`⚠️ Could not send DM to ${member.user.username}: ${error.message}`);
-    }
-    
-    console.log(`👋 Welcomed ${member.user.username} to ${member.guild.name} (Member #${memberCount})`);
   } catch (error) {
-    console.error(`❌ Error sending welcome message:`, error);
+    console.error("❌ Error sending daily leaderboard:", error);
   }
-});
-
-// Helper function for ordinal numbers
-function getOrdinalSuffix(number) {
-  const j = number % 10;
-  const k = number % 100;
-  if (j == 1 && k != 11) return "st";
-  if (j == 2 && k != 12) return "nd";
-  if (j == 3 && k != 13) return "rd";
-  return "th";
 }
 
-// Enhanced voice channel tracking with clock-in/clock-out messages
+// Voice state update handler
 client.on("voiceStateUpdate", async (oldState, newState) => {
-  const member = newState.member;
+  const member = newState.member || oldState.member;
   const userId = member.id;
+  const now = Date.now();
 
-  // User joined a voice channel (from no channel)
+  // User joined a voice channel
   if (!oldState.channel && newState.channel) {
     global.timeTracking[userId] = {
-      startTime: Date.now(),
-      channel: newState.channel.name,
-      channelId: newState.channel.id,
+      startTime: now,
+      channel: newState.channel,
     };
 
-    console.log(
-      `🕐 Started tracking ${member.user.username} in ${newState.channel.name}`,
-    );
     await sendClockInMessage(member, newState.channel);
+    console.log(
+      `👤 ${member.user.username} joined voice channel: ${newState.channel.name}`,
+    );
   }
-
-  // User left a voice channel (to no channel)
+  // User left a voice channel
   else if (oldState.channel && !newState.channel) {
     if (global.timeTracking[userId]) {
-      const session = global.timeTracking[userId];
-      const timeSpent = Date.now() - session.startTime;
+      const sessionDuration = now - global.timeTracking[userId].startTime;
+      const faction = getUserFaction(member);
 
-      // Send clock-out message
-      await sendClockOutMessage(member, oldState.channel, timeSpent);
-      
-      // Send motivational DM to user
-      await sendMotivationalDM(member, timeSpent);
-
-      // Update faction time tracking (only if factions are enabled)
+      // Only track time if factions are enabled for this guild
       if (areFactionsEnabled(member.guild)) {
-        const faction = getUserFaction(member);
-        if (faction && global.factionTimes[faction.key] !== undefined) {
-          global.factionTimes[faction.key] += timeSpent;
-          console.log(
-            `📊 Added ${formatDuration(timeSpent)} to ${faction.name} faction total`,
-          );
+        // Add to user's total time
+        if (!global.userTimes[userId]) global.userTimes[userId] = 0;
+        global.userTimes[userId] += sessionDuration;
+
+        // Add to faction time if user has a faction
+        if (faction) {
+          global.factionTimes[faction.key] += sessionDuration;
         }
       }
 
-      // Update individual user time tracking
-      if (!global.userTimes[userId]) {
-        global.userTimes[userId] = {
-          totalTime: 0,
-          sessions: 0,
-          longestSession: 0,
-          todayTime: 0,
-          lastActive: null
-        };
-      }
-      
-      global.userTimes[userId].totalTime += timeSpent;
-      global.userTimes[userId].sessions += 1;
-      global.userTimes[userId].todayTime += timeSpent;
-      global.userTimes[userId].lastActive = Date.now();
-      
-      if (timeSpent > global.userTimes[userId].longestSession) {
-        global.userTimes[userId].longestSession = timeSpent;
-      }
+      await sendClockOutMessage(member, oldState.channel, sessionDuration);
+      await sendMotivationalDM(member, sessionDuration);
 
       delete global.timeTracking[userId];
       console.log(
-        `📊 Logged ${member.user.username}'s session in ${session.channel}: ${formatDuration(timeSpent)}`,
+        `👤 ${member.user.username} left voice channel: ${oldState.channel.name} (${formatDuration(sessionDuration)})`,
       );
     }
   }
-
-  // User switched voice channels
-  else if (
-    oldState.channel &&
-    newState.channel &&
-    oldState.channel.id !== newState.channel.id
-  ) {
+  // User switched channels
+  else if (oldState.channel && newState.channel && oldState.channel.id !== newState.channel.id) {
     if (global.timeTracking[userId]) {
-      const session = global.timeTracking[userId];
-      const timeSpent = Date.now() - session.startTime;
+      const sessionDuration = now - global.timeTracking[userId].startTime;
+      const faction = getUserFaction(member);
 
-      // Send channel switch message
+      // Only track time if factions are enabled for this guild
+      if (areFactionsEnabled(member.guild)) {
+        // Add to user's total time
+        if (!global.userTimes[userId]) global.userTimes[userId] = 0;
+        global.userTimes[userId] += sessionDuration;
+
+        // Add to faction time if user has a faction
+        if (faction) {
+          global.factionTimes[faction.key] += sessionDuration;
+        }
+      }
+
       await sendChannelSwitchMessage(
         member,
         oldState.channel,
         newState.channel,
-        timeSpent,
+        sessionDuration,
       );
 
-      // Update faction time tracking for the previous session (only if factions are enabled)
-      if (areFactionsEnabled(member.guild)) {
-        const faction = getUserFaction(member);
-        if (faction && global.factionTimes[faction.key] !== undefined) {
-          global.factionTimes[faction.key] += timeSpent;
-          console.log(
-            `📊 Added ${formatDuration(timeSpent)} to ${faction.name} faction total`,
-          );
-        }
-      }
-
-      // Update individual user time tracking
-      if (!global.userTimes[userId]) {
-        global.userTimes[userId] = {
-          totalTime: 0,
-          sessions: 0,
-          longestSession: 0,
-          todayTime: 0,
-          lastActive: null
-        };
-      }
-      
-      global.userTimes[userId].totalTime += timeSpent;
-      global.userTimes[userId].sessions += 1;
-      global.userTimes[userId].todayTime += timeSpent;
-      global.userTimes[userId].lastActive = Date.now();
-      
-      if (timeSpent > global.userTimes[userId].longestSession) {
-        global.userTimes[userId].longestSession = timeSpent;
-      }
-
-      // Start new tracking session for the new channel
+      // Update tracking for new channel
       global.timeTracking[userId] = {
-        startTime: Date.now(),
-        channel: newState.channel.name,
-        channelId: newState.channel.id,
+        startTime: now,
+        channel: newState.channel,
       };
 
       console.log(
-        `🔄 ${member.user.username} switched from ${oldState.channel.name} to ${newState.channel.name} (${formatDuration(timeSpent)})`,
+        `👤 ${member.user.username} switched: ${oldState.channel.name} → ${newState.channel.name} (${formatDuration(sessionDuration)})`,
       );
-    } else {
-      // Edge case: user wasn't being tracked but switched channels
-      global.timeTracking[userId] = {
-        startTime: Date.now(),
-        channel: newState.channel.name,
-        channelId: newState.channel.id,
-      };
-
-      console.log(
-        `🕐 Started tracking ${member.user.username} in ${newState.channel.name} (channel switch)`,
-      );
-      await sendClockInMessage(member, newState.channel);
     }
   }
 });
 
-// New Event Listener for Message Content
-client.on("messageCreate", async (message) => {
-  // Ignore messages from bots to prevent an infinite loop
-  if (message.author.bot) return;
+// Interaction handler
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isCommand()) return;
 
-  // Regular expression to detect common Discord invite links
-  const inviteRegex = /(https?:\/\/)?(www\.)?(discord\.(gg|io|me|li)|discordapp\.com\/invite)\/[a-zA-Z0-9-]{1,}/g;
+  const command = client.commands.get(interaction.commandName);
+  if (!command) return;
 
-  // Check if the message content contains an invite link
-  if (inviteRegex.test(message.content)) {
-    // A flag to ensure we only warn the user once per message
-    let alreadyWarned = false;
+  try {
+    await command.execute(interaction);
+  } catch (error) {
+    console.error(`❌ Error executing ${interaction.commandName}:`, error);
+    const reply = {
+      content: "❌ There was an error executing this command!",
+      ephemeral: true,
+    };
+
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp(reply);
+    } else {
+      await interaction.reply(reply);
+    }
+  }
+});
+
+// Handle member join events for welcome messages
+client.on("guildMemberAdd", async (member) => {
+  try {
+    const guildId = member.guild.id;
     
-    // Check if the link is to this server, if so, ignore it
-    const invites = await message.guild.invites.fetch();
-    const isThisServerInvite = invites.some(invite => message.content.includes(invite.code));
+    // Check if guild settings exist and have a welcome channel set
+    if (!global.guildSettings[guildId] || !global.guildSettings[guildId].welcomeChannelId) {
+      return; // No welcome channel set
+    }
     
-    if (isThisServerInvite) {
-      // It's an invite to the same server, so do nothing.
+    const welcomeChannelId = global.guildSettings[guildId].welcomeChannelId;
+    const welcomeChannel = member.guild.channels.cache.get(welcomeChannelId);
+    
+    if (!welcomeChannel) {
+      console.warn(`⚠️ Welcome channel not found: ${welcomeChannelId}`);
       return;
     }
-
-    try {
-      // 1. Delete the message
-      if (message.deletable) {
-        await message.delete();
-      }
-
-      // 2. Warn the user via a DM
-      if (!alreadyWarned) {
-        await message.author.send({
-          content: `⚠️ Your message was deleted in **${message.guild.name}** because it contained a Discord invite link.`,
-          embeds: [{
-            title: "🚫 Discord Invite Link Detected",
-            description: `**Your message:**\n${message.content}`,
-            color: 0xffa500,
-            footer: {
-              text: "Please do not share invite links to other servers."
-            },
-            timestamp: new Date().toISOString()
-          }]
-        }).catch(err => {
-          console.error(`❌ Could not DM user ${message.author.tag}: ${err}`);
-          // If the DM fails, you can still send the public warning
-        });
-        alreadyWarned = true;
-      }
-      
-      // 3. Send a warning to the designated channel
-      if (global.warnChannelId) {
-        const warnChannel = message.guild.channels.cache.get(global.warnChannelId);
-        if (warnChannel) {
-          const warningEmbed = new EmbedBuilder()
-            .setTitle("🚫 Invite Link Warning")
-            .setColor(0xffa500)
-            .setAuthor({
-              name: message.author.tag,
-              iconURL: message.author.displayAvatarURL(),
-            })
-            .setDescription(`**User:** ${message.author}\n**Channel:** ${message.channel}\n**Deleted Message Content:**\n\`\`\`\n${message.content.substring(0, 1020)}\n\`\`\``)
-            .setTimestamp()
-            .setFooter({ text: "Auto-Moderation System" });
-
-          await warnChannel.send({ embeds: [warningEmbed] });
-          console.log(`📝 Sent invite link warning for ${message.author.tag}`);
-        }
-      }
-
-    } catch (error) {
-      console.error("❌ Error handling invite link:", error);
-    }
+    
+    // Create welcome embed
+    const embed = new EmbedBuilder()
+      .setTitle("🎉 Welcome to the Server!")
+      .setColor(0x00ff00)
+      .setDescription(`Welcome ${member}! We're glad to have you here.`)
+      .addFields(
+        { name: "👤 Member", value: `${member.displayName}`, inline: true },
+        { name: "📅 Joined", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+        { name: "📊 Member Count", value: `${member.guild.memberCount}`, inline: true }
+      )
+      .setThumbnail(member.user.displayAvatarURL())
+      .setTimestamp()
+      .setFooter({ text: "Welcome System" });
+    
+    await welcomeChannel.send({ embeds: [embed] });
+    console.log(`👋 Sent welcome message for ${member.user.username}`);
+    
+  } catch (error) {
+    console.error("❌ Error sending welcome message:", error);
   }
 });
-// End of New Event Listener
 
-// Express server
+// Start Express server for health checks
 const app = express();
+app.get('/', (req, res) => {
+  res.send('Discord bot is running!');
+});
+
 const PORT = process.env.PORT || 5000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🌐 Health check server running on port ${PORT}`);
+});
 
-app.get("/", (req, res) =>
-  res.json({
-    status: "✅ Bot running",
-    clockInChannel: global.clockInChannelId,
-  }),
-);
-app.get("/health", (req, res) => res.json({ status: "healthy" }));
-app.listen(PORT, "0.0.0.0", () =>
-  console.log(`🌐 Web server running on port ${PORT}`),
-);
+// Login to Discord
+const token = process.env.DISCORD_TOKEN || process.env.TOKEN;
+if (!token) {
+  console.error("❌ No Discord token found! Please set DISCORD_TOKEN or TOKEN environment variable.");
+  process.exit(1);
+}
 
-// Login
-client.login(process.env.DISCORD_TOKEN);
+client.login(token);
