@@ -1,26 +1,26 @@
 const { SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
 
+const MEMBER_ROLE_ID = "1385824103818330293"; // ✅ Member role
+const NEEDS_VERIFY_ROLE_ID = "1412199598566412448"; // ⛔ Needs to Get Verified role
+const VERIFY_CHANNEL_ID = "1412200030215082075"; // 📌 Verify channel
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("verify")
-    .setDescription("Verify yourself with your PlayStation username")
+    .setDescription("Verify yourself by entering your PlayStation username")
     .addStringOption(option =>
-      option.setName("psn")
-        .setDescription("Enter your PlayStation username")
+      option
+        .setName("username")
+        .setDescription("Your PlayStation username")
         .setRequired(true)
     ),
+  
   async execute(interaction) {
-    const psn = interaction.options.getString("psn");
+    const username = interaction.options.getString("username");
     const member = interaction.member;
 
-    // ID of your verify channel
-    const verifyChannelId = "1412200030215082075"; // ⬅️ replace with your verify channel ID
-
-    // ID of your Member role
-    const memberRoleId = "1385824103818330293"; // ⬅️ replace with your Member role ID
-
-    // Make sure command is only used in verify channel
-    if (interaction.channel.id !== verifyChannelId) {
+    // 🔒 Make sure command is only used in verify channel
+    if (interaction.channelId !== VERIFY_CHANNEL_ID) {
       return interaction.reply({
         content: "❌ You can only use this command in the verification channel!",
         ephemeral: true,
@@ -29,20 +29,25 @@ module.exports = {
 
     try {
       // Change nickname
-      await member.setNickname(psn);
+      await member.setNickname(username).catch(() => {});
 
-      // Add member role
-      await member.roles.add(memberRoleId);
+      // Add Member role
+      await member.roles.add(MEMBER_ROLE_ID);
+
+      // Remove Needs to Get Verified role
+      if (member.roles.cache.has(NEEDS_VERIFY_ROLE_ID)) {
+        await member.roles.remove(NEEDS_VERIFY_ROLE_ID);
+      }
 
       await interaction.reply({
-        content: `✅ You’ve been verified! Your nickname is now **${psn}** and you have access to the server.`,
+        content: `✅ You have been verified!\nYour nickname is now **${username}** and you have been given access.`,
         ephemeral: true,
       });
 
     } catch (error) {
-      console.error("Error in verify command:", error);
+      console.error("Verify command error:", error);
       await interaction.reply({
-        content: "❌ I couldn’t verify you. Please check my role is above Member role and I have Manage Nicknames permission.",
+        content: "❌ Something went wrong while verifying you. Please contact a staff member.",
         ephemeral: true,
       });
     }
