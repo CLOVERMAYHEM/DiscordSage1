@@ -1,0 +1,26 @@
+require('dotenv').config();
+const { MongoClient } = require('mongodb');
+
+const uri = process.env.MONGO_URI;
+const client = new MongoClient(uri);
+
+let db;
+
+async function connectDB() {
+  try {
+    await client.connect();
+    console.log('✅ MongoDB connected');
+    db = client.db('discordBotDB'); // You can name your DB whatever you want
+  } catch (error) {
+    console.error('❌ MongoDB connection error:', error);
+  }
+}
+
+// Call this on startup
+connectDB();
+
+// Export the database for other files
+module.exports = {
+  db,
+  client
+};
