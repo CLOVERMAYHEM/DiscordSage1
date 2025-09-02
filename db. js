@@ -10,17 +10,22 @@ async function connectDB() {
   try {
     await client.connect();
     console.log('✅ MongoDB connected');
-    db = client.db('discordBotDB'); // You can name your DB whatever you want
+    db = client.db('discordBotDB'); // Name your DB
+    return db;
   } catch (error) {
     console.error('❌ MongoDB connection error:', error);
+    throw error;
   }
 }
 
-// Call this on startup
-connectDB();
+// Export a function to get the DB once connected
+function getDB() {
+  if (!db) throw new Error('Database not connected yet');
+  return db;
+}
 
-// Export the database for other files
 module.exports = {
-  db,
+  connectDB,
+  getDB,
   client
 };
